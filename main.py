@@ -149,6 +149,9 @@ async def k(ctx, key: str, when: str = None):
         return await ctx.send("查無此王/關鍵字")
     now = dt.datetime.now(TIMEZONE)
     death = parse_time(when, now) if when else now
+    if when and death > now:
+    # 使用者輸入的時間其實在今天較早，將其調回今天
+    death -= dt.timedelta(days=1)
     if death is None:
         return await ctx.send("時間格式錯誤 hhmm 或 MMddhhmm")
     nxt = death + dt.timedelta(minutes=bosses[name]["respawn_min"])
