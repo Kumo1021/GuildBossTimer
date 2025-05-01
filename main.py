@@ -98,7 +98,7 @@ def schedule_alert(ch, boss: str, when: dt.datetime):
 
 # ─────────────────────────────────── 事件攔截
 @bot.event
-aasync def on_message(msg):
+async def on_message(msg):
     if msg.author.bot:
         return
     await bot.process_commands(msg)
