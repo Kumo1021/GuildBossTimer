@@ -240,28 +240,58 @@ async def remove(ctx, key: str):
 # ---------------- 新增指令 ----------------
 
 @bot.command(name="tags")
-async def tags(ctx, action: str, boss_name: str, tag: str):
-    """用法：tags add/remove [王名稱] [關鍵字]"""
+async def tags(ctx, action: str, boss_name: str, *tag_list: str):
+    """管理王的關鍵字：
+    - tags add [王名稱] [關鍵字1] [關鍵字2] ...
+    - tags remove [王名稱] [關鍵字1] [關鍵字2] ...
+    如果未提供任何關鍵字，將提示格式錯誤。"""
+
+    if not tag_list:
+        return await ctx.send("格式錯誤：請至少提供一個關鍵字。用法：tags add/remove [王名稱] [關鍵字…]")
+
     name = resolve_boss(boss_name)
     if not name:
         return await ctx.send("查無此王/關鍵字")
 
+    # 確保 aliases 欄位存在
+    aliases = bosses[name].setdefault("aliases", [])
+
     if action == "add":
-        if tag in bosses[name]["aliases"]:
-            return await ctx.send("此關鍵字已存在")
-        bosses[name]["aliases"].append(tag)
+        added = []
+        existed = []
+        for tag in tag_list:
+            if tag in aliases:
+                existed.append(tag)
+            else:
+                aliases.append(tag)
+                added.append(tag)
         save_bosses(bosses)
-        return await ctx.send(f"已為 **{name}** 新增關鍵字 **{tag}**")
+        msg = []
+        if added:
+            msg.append(f"已為 **{name}** 新增關鍵字：{', '.join(added)}")
+        if existed:
+            msg.append(f"以下關鍵字已存在：{', '.join(existed)}")
+        return await ctx.send("\n".join(msg))
 
     elif action == "remove":
-        if tag not in bosses[name]["aliases"]:
-            return await ctx.send("此關鍵字不存在")
-        bosses[name]["aliases"].remove(tag)
+        removed = []
+        missing = []
+        for tag in tag_list:
+            if tag in aliases:
+                aliases.remove(tag)
+                removed.append(tag)
+            else:
+                missing.append(tag)
         save_bosses(bosses)
-        return await ctx.send(f"已從 **{name}** 移除關鍵字 **{tag}**")
+        msg = []
+        if removed:
+            msg.append(f"已從 **{name}** 移除關鍵字：{', '.join(removed)}")
+        if missing:
+            msg.append(f"以下關鍵字不存在：{', '.join(missing)}")
+        return await ctx.send("\n".join(msg))
 
     else:
-        return await ctx.send("格式錯誤，用法: tags add/remove [王名稱] [關鍵字]")
+        return await ctx.send("格式錯誤：動作必須是 add 或 remove")
 
 
 @bot.command(name="info")
