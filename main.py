@@ -10,11 +10,15 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 NOTIFY_CHANNEL = os.getenv('NOTIFY_CHANNEL', 'boss-notify')
 PREFIX = ''  # 無前綴，直接以指令名稱呼叫
 
-bot = commands.Bot(command_prefix=PREFIX)
+# 設定 Intents
+intents = discord.Intents.default()
+intents.message_content = True  # 允許讀取訊息內容以解析指令
+
+# 建立 Bot
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 DATA_FILE = 'bosses.json'
 
 # 載入與儲存資料
-
 def load_bosses():
     if not os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -27,7 +31,6 @@ def load_bosses():
         info.setdefault('notified', False)
     return data
 
-
 def save_bosses(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -35,7 +38,6 @@ def save_bosses(data):
 bosses = load_bosses()
 
 # 輔助：名稱/別名對應
-
 def resolve_boss(key: str):
     key_lower = key.lower()
     for name, info in bosses['bosses'].items():
@@ -44,7 +46,6 @@ def resolve_boss(key: str):
     return None
 
 # 解析時間字串：hhmm 或 MMddhhmm
-
 def parse_time_str(ts: str):
     now = datetime.now()
     if len(ts) == 4 and ts.isdigit():
@@ -65,7 +66,7 @@ async def check_respawns():
     now = datetime.now()
     for name, info in bosses['bosses'].items():
         ns = info.get('next_spawn')
-        if ns and not info.get('notified'):  # 尚未推播
+        if ns and not info.get('notified'):
             spawn_time = datetime.fromisoformat(ns)
             delta = (spawn_time - now).total_seconds()
             if 0 < delta <= 300:
@@ -199,53 +200,9 @@ async def rename_boss(ctx, old: str, new: str):
 @bot.command(name='retime')
 async def retime_boss(ctx,name:str,respawn_min:int):
     boss=resolve_boss(name)
-    if not boss: return await ctx.send(f"查無 Boss **{name}**。")
+    if not boss: return await ctx.send(f"查無 Boss **{name్**。")
     bosses['bosses'][boss]['respawn_min']=respawn_min; save_bosses(bosses)
     await ctx.send(f"已修改 **{boss}** 的重生週期為 {respawn_min} 分鐘。")
 
 @bot.command(name='remove')
-async def remove_boss(ctx,name:str):
-    real=resolve_boss(name)
-    if not real: return await ctx.send(f"查無 Boss **{name}**。")
-    bosses['bosses'].pop(real); save_bosses(bosses)
-    await ctx.send(f"已移除 **{real}**。")
-
-# 關鍵字管理
-@bot.group(name='tags')
-async def tags_group(ctx):
-    if ctx.invoked_subcommand is None:
-        await ctx.send("請使用 `tags add [Boss] [關鍵字]` 或 `tags remove [Boss] [關鍵字]`。")
-
-@tags_group.command(name='add')
-async def tags_add(ctx,name:str,alias:str):
-    boss=resolve_boss(name)
-    if not boss: return await ctx.send(f"查無 Boss **{name}**。")
-    data=bosses['bosses'][boss]
-    if alias in data['aliases']: return await ctx.send(f"關鍵字 **{alias}** 已存在。")
-    data['aliases'].append(alias); save_bosses(bosses)
-    await ctx.send(f"已為 **{boss}** 新增關鍵字 **{alias}**。")
-
-@tags_group.command(name='remove')
-async def tags_remove(ctx,name:str,alias:str):
-    boss=resolve_boss(name)
-    if not boss: return await ctx.send(f"查無 Boss **{name}**。")
-    data=bosses['bosses'][boss]
-    if alias not in data['aliases']: return await ctx.send(f"關鍵字 **{alias}** 不存在。")
-    data['aliases'].remove(alias); save_bosses(bosses)
-    await ctx.send(f"已為 **{boss}** 刪除關鍵字 **{alias}**。")
-
-# 查看設定資料 info [Boss]
-@bot.command(name='info')
-async def info_boss(ctx,name:str=None):
-    data=bosses['bosses']
-    if name:
-        boss=resolve_boss(name)
-        if not boss: return await ctx.send(f"查無 Boss **{name}**。")
-        info=data[boss]; al=', '.join(info['aliases']) if info['aliases'] else '無'
-        return await ctx.send(f"**{boss}**：週期 {info['respawn_min']} 分鐘，關鍵字：{al}")
-    lines=[f"{n}：週期 {v['respawn_min']} 分鐘，關鍵字：{', '.join(v['aliases']) if v['aliases'] else '無'}" for n,v in data.items()]
-    if not lines: return await ctx.send("目前沒有任何 Boss 設定。")
-    await ctx.send("所有 Boss 設定：\n" + "\n".join(lines))
-
-if __name__ == '__main__':
-    bot.run(TOKEN)
+async def remove
