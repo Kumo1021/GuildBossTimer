@@ -1,376 +1,251 @@
-# -*- coding: utf-8 -*-
-"""
-Discord Guild Boss Timer Bot – 完整版
-(2025-05-01)
-"""
-import json, os, re, asyncio, datetime as dt
-from typing import Optional, Tuple, Dict, List
-
 import discord
-from discord.ext import commands
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
-import pytz
+from discord.ext import commands, tasks
+import json, os
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# ─────────────────────────────────── 基本設定
+# 載入 .env
 load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
-TIMEZONE = pytz.timezone("Asia/Taipei")
-DATA_FILE = "bosses.json"
-DATE_FMT = "%m/%d %H:%M"
+TOKEN = os.getenv('DISCORD_TOKEN')
+NOTIFY_CHANNEL = os.getenv('NOTIFY_CHANNEL', 'boss-notify')
+PREFIX = ''  # 無前綴，直接以指令名稱呼叫
 
-# ─────────────────────────────────── 資料存取
+bot = commands.Bot(command_prefix=PREFIX)
+DATA_FILE = 'bosses.json'
 
-def load_bosses() -> Dict[str, dict]:
+# 載入與儲存資料
+
+def load_bosses():
     if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({}, f, ensure_ascii=False, indent=2)
-    with open(DATA_FILE, encoding="utf-8") as f:
-        return json.load(f)
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'bosses': {}}, f, ensure_ascii=False, indent=2)
+    with open(DATA_FILE, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    for info in data.get('bosses', {}).values():
+        info.setdefault('aliases', [])
+        info.setdefault('next_spawn', None)
+        info.setdefault('notified', False)
+    return data
 
-def save_bosses(data: Dict[str, dict]):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+
+def save_bosses(data):
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 bosses = load_bosses()
 
-# ─────────────────────────────────── 工具函式
+# 輔助：名稱/別名對應
 
-def parse_time(s: str, now: dt.datetime) -> Optional[dt.datetime]:
-    """支援 hhmm 或 MMddhhmm，回傳 tz-aware datetime。"""
-    if not s:
-        return None
-    if re.fullmatch(r"\d{4}", s):
-        hh, mm = int(s[:2]), int(s[2:])
-        t = TIMEZONE.localize(dt.datetime.combine(now.date(), dt.time(hh, mm)))
-        if t < now:
-            t += dt.timedelta(days=1)
-        return t
-    if re.fullmatch(r"\d{8}", s):
-        M, d, hh, mm = map(int, (s[:2], s[2:4], s[4:6], s[6:]))
-        year = now.year + ((M, d) < (now.month, now.day))
-        return TIMEZONE.localize(dt.datetime(year, M, d, hh, mm))
-    return None
-
-
-def resolve_boss(key: str) -> Optional[str]:
-    k = key.lower()
-    for name, d in bosses.items():
-        if k == name.lower() or k in [t.lower() for t in d.get("aliases", [])]:
+def resolve_boss(key: str):
+    key_lower = key.lower()
+    for name, info in bosses['bosses'].items():
+        if name.lower() == key_lower or key_lower in [a.lower() for a in info['aliases']]:
             return name
     return None
 
+# 解析時間字串：hhmm 或 MMddhhmm
 
-def advance_to_future(name: str, now: dt.datetime) -> Tuple[Optional[dt.datetime], int]:
-    data = bosses[name]
-    nxt_iso = data.get("next_spawn")
-    if not nxt_iso:
-        return None, 0
-    nxt = dt.datetime.fromisoformat(nxt_iso)
-    if nxt > now:
-        return nxt, 0
-    cycle = dt.timedelta(minutes=data["respawn_min"])
-    missed = int((now - nxt) // cycle) + 1
-    nxt += cycle * missed
-    data["next_spawn"] = nxt.isoformat()
-    return nxt, missed
+def parse_time_str(ts: str):
+    now = datetime.now()
+    if len(ts) == 4 and ts.isdigit():
+        hour, minute = int(ts[:2]), int(ts[2:])
+        return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    elif len(ts) == 8 and ts.isdigit():
+        m, d = int(ts[:2]), int(ts[2:4])
+        hh, mi = int(ts[4:6]), int(ts[6:])
+        try:
+            return datetime(now.year, m, d, hh, mi)
+        except ValueError:
+            return None
+    return None
 
-# ─────────────────────────────────── Bot 初始化
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="", intents=intents)
-
-aio_sched = AsyncIOScheduler(timezone=TIMEZONE)
-aio_sched.start()
-
-default_channel_id = int(os.getenv("CHANNEL_ID", 0))  # 建議把公告頻道 ID 放 .env
-alert_ch = bot.get_channel(default_channel_id)
-
-now = dt.datetime.now(TIMEZONE)
-for name, data in bosses.items():
-    nxt_iso = data.get("next_spawn")
-    if not nxt_iso:
-        continue
-    nxt = dt.datetime.fromisoformat(nxt_iso)
-    if nxt > now and alert_ch:
-        schedule_alert(alert_ch, name, nxt)
-# ─────────────────────────────────── 排程提示
-
-from discord import AllowedMentions
-
-def schedule_alert(ch, boss: str, when: dt.datetime, tags: List[str] | None = None):
-    alert = when - dt.timedelta(minutes=5)
-    if alert < dt.datetime.now(TIMEZONE):
-        return
-
-    # tags 來自 add 指令儲存的別名；沒給就預設 @here
-    mention = " ".join(tags) if tags else "@here"
-    msg = f"{mention} ⏰ **{boss}** 5 分鐘後重生！"
-
-    aio_sched.add_job(
-        lambda: asyncio.run_coroutine_threadsafe(
-            ch.send(
-                msg,
-                allowed_mentions=AllowedMentions(everyone=True)  # 允許 @here/@everyone
-            ),
-            bot.loop
-        ),
-        trigger=DateTrigger(run_date=alert),
-        name=f"alert_{boss}_{int(when.timestamp())}"
-    )
-
-# ─────────────────────────────────── 事件攔截
-@bot.event
-async def on_message(msg):
-    if msg.author.bot:
-        return
-    await bot.process_commands(msg)
-
-# ─────────────────────────────────── kb
-@bot.command(name="kb")
-async def kb(ctx, sub: str = None):
-    now = dt.datetime.now(TIMEZONE)
-    rows: List[Tuple[str, dt.datetime, int]] = []
-    changed = False
-    for n in bosses:
-        nxt, missed = advance_to_future(n, now)
-        if nxt:
-            rows.append((n, nxt, missed))
-            schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
-            if missed:
-                changed = True
-    if changed:
-        save_bosses(bosses)
-    if not rows:
-        return await ctx.send("尚未有紀錄")
-    rows.sort(key=lambda x: x[1])
-    if sub != "all":
-        rows = rows[:10]
-    lines = ["**接下來重生表**"]
-    for n, t, m in rows:
-        left = int((t - now).total_seconds() // 60)
-        miss_txt = f"（已過 {m} 次）" if m else ""
-        lines.append(f"• {t:{DATE_FMT}} ➜ **{n}**（剩 {left} 分）{miss_txt}")
-    await ctx.send("\n".join(lines))
-
-# ─────────────────────────────────── k
-@bot.command(name="k")
-async def k(ctx, key: str, when: str = None):
-    name = resolve_boss(key)
-    if not name:
-        return await ctx.send("查無此王/關鍵字")
-    now = dt.datetime.now(TIMEZONE)
-    death = parse_time(when, now) if when else now
-# 若使用者手動輸入的時間被 parse_time 誤判成「明天」
-    if when and death > now:
-        death -= dt.timedelta(days=1)
-    if death is None:
-        return await ctx.send("時間格式錯誤 hhmm 或 MMddhhmm")
-    nxt = death + dt.timedelta(minutes=bosses[name]["respawn_min"])
-    bosses[name]["next_spawn"] = nxt.isoformat()
+# 定期檢查重生前 5 分鐘推播
+@tasks.loop(minutes=1)
+async def check_respawns():
+    now = datetime.now()
+    for name, info in bosses['bosses'].items():
+        ns = info.get('next_spawn')
+        if ns and not info.get('notified'):  # 尚未推播
+            spawn_time = datetime.fromisoformat(ns)
+            delta = (spawn_time - now).total_seconds()
+            if 0 < delta <= 300:
+                channel = discord.utils.get(bot.get_all_channels(), name=NOTIFY_CHANNEL)
+                if channel:
+                    await channel.send(f"Boss **{name}** 即將在 5 分鐘後重生！")
+                info['notified'] = True
     save_bosses(bosses)
-    schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
-    await ctx.send(f"已記錄 **{name}**，下次 {nxt:{DATE_FMT}} 重生")
 
-# ─────────────────────────────────── kr
-@bot.command(name="kr")
-async def kr(ctx, key: str, ts: str):
-    name = resolve_boss(key)
-    if not name:
-        return await ctx.send("查無此王/關鍵字")
-    now = dt.datetime.now(TIMEZONE)
-    nxt = parse_time(ts, now)
-    if nxt is None:
-        return await ctx.send("時間格式錯誤 hhmm 或 MMddhhmm")
-    bosses[name]["next_spawn"] = nxt.isoformat()
-    save_bosses(bosses)
-    schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
-    await ctx.send(f"已設定 **{name}** 下一次 {nxt:{DATE_FMT}} 重生")
-
-# ─────────────────────────────────── clear
-@bot.command(name="clear")
-async def clear(ctx, target: str):
-    now = dt.datetime.now(TIMEZONE)
-    if target == "all":
-        for b in bosses.values():
-            b["next_spawn"] = None
-        save_bosses(bosses)
-        return await ctx.send("已清除所有紀錄")
-    if target == "lost":
-        for b in bosses.values():
-            if b.get("next_spawn") and dt.datetime.fromisoformat(b["next_spawn"]) < now:
-                b["next_spawn"] = None
-        save_bosses(bosses)
-        return await ctx.send("已清除過期紀錄")
-    name = resolve_boss(target)
-    if not name:
-        return await ctx.send("查無此王/關鍵字")
-    bosses[name]["next_spawn"] = None
-    save_bosses(bosses)
-    await ctx.send(f"已清除 **{name}** 紀錄")
-
-# ─────────────────────────────────── restart
-@bot.command(name="restart", aliases=["!restart"])
-async def restart(ctx, ts: str = None):
-    now = dt.datetime.now(TIMEZONE)
-    base = parse_time(ts, now) if ts else now
-    if ts and base is None:
-        return await ctx.send("時間格式錯誤 hhmm")
-    for n, d in bosses.items():
-        nxt = base + dt.timedelta(minutes=d["respawn_min"])
-        d["next_spawn"] = nxt.isoformat()
-        schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
-    save_bosses(bosses)
-    await ctx.send("已重設全部王死亡時間")
-
-# ─────────────────────────────────── 管理指令
-@bot.command(name="add")
-async def add(ctx, name: str, cycle: int, *tags):
-    if name in bosses:
-        return await ctx.send("已存在同名王")
-    bosses[name] = {"respawn_min": int(cycle), "aliases": list(tags), "next_spawn": None}
-    save_bosses(bosses)
-    await ctx.send(f"已新增 **{name}**，週期 {cycle} 分，關鍵字 {', '.join(tags) if tags else '無'}")
-
-
-@bot.command(name="rename")
-async def rename(ctx, old: str, new: str):
-    if new in bosses:
-        return await ctx.send("新名稱已存在")
-    name = resolve_boss(old)
-    if not name:
-        return await ctx.send("查無此王/關鍵字")
-    bosses[new] = bosses.pop(name)
-    save_bosses(bosses)
-    await ctx.send(f"已將 **{name}** 更名為 **{new}**")
-
-
-@bot.command(name="retime")
-async def retime(ctx, key: str, cycle: int):
-    name = resolve_boss(key)
-    if not name:
-        return await ctx.send("查無此王/關鍵字")
-    bosses[name]["respawn_min"] = int(cycle)
-    save_bosses(bosses)
-    await ctx.send(f"已修改 **{name}** 週期為 {cycle} 分")
-
-
-@bot.command(name="remove")
-async def remove(ctx, key: str):
-    name = resolve_boss(key)
-    if not name:
-        return await ctx.send("查無此王/關鍵字")
-    bosses.pop(name)
-    save_bosses(bosses)
-    await ctx.send(f"已刪除 **{name}** 的資料")
-
-# ---------------- 新增指令 ----------------
-
-@bot.command(name="tags")
-async def tags(ctx, action: str, boss_name: str, *tag_list: str):
-    """管理王的關鍵字：
-    - tags add [王名稱] [關鍵字1] [關鍵字2] ...
-    - tags remove [王名稱] [關鍵字1] [關鍵字2] ...
-    如果未提供任何關鍵字，將提示格式錯誤。"""
-
-    if not tag_list:
-        return await ctx.send("格式錯誤：請至少提供一個關鍵字。用法：tags add/remove [王名稱] [關鍵字…]")
-
-    name = resolve_boss(boss_name)
-    if not name:
-        return await ctx.send("查無此王/關鍵字")
-
-    # 確保 aliases 欄位存在
-    aliases = bosses[name].setdefault("aliases", [])
-
-    if action == "add":
-        added = []
-        existed = []
-        for tag in tag_list:
-            if tag in aliases:
-                existed.append(tag)
-            else:
-                aliases.append(tag)
-                added.append(tag)
-        save_bosses(bosses)
-        msg = []
-        if added:
-            msg.append(f"已為 **{name}** 新增關鍵字：{', '.join(added)}")
-        if existed:
-            msg.append(f"以下關鍵字已存在：{', '.join(existed)}")
-        return await ctx.send("\n".join(msg))
-
-    elif action == "remove":
-        removed = []
-        missing = []
-        for tag in tag_list:
-            if tag in aliases:
-                aliases.remove(tag)
-                removed.append(tag)
-            else:
-                missing.append(tag)
-        save_bosses(bosses)
-        msg = []
-        if removed:
-            msg.append(f"已從 **{name}** 移除關鍵字：{', '.join(removed)}")
-        if missing:
-            msg.append(f"以下關鍵字不存在：{', '.join(missing)}")
-        return await ctx.send("\n".join(msg))
-
-    else:
-        return await ctx.send("格式錯誤：動作必須是 add 或 remove")
-
-
-@bot.command(name="info")
-async def info(ctx, *args):
-    """列出王的設定資料：
-    - info                 列出全部王的週期與關鍵字
-    - info [王名稱]        列出指定王的週期與關鍵字
-    """
-    if len(args) == 0:
-        if not bosses:
-            return await ctx.send("目前無任何王的資料")
-        lines = []
-        for name, data in bosses.items():
-            cycle = data.get("respawn_min", "未知")
-            aliases = ", ".join(data.get("aliases", [])) or "無"
-            lines.append(f"**{name}** - 週期: {cycle} 分, 關鍵字: {aliases}")
-        return await ctx.send("\n".join(lines))
-
-    else:
-        name = resolve_boss(args[0])
-        if not name:
-            return await ctx.send("查無此王/關鍵字")
-        data = bosses[name]
-        cycle = data.get("respawn_min", "未知")
-        aliases = ", ".join(data.get("aliases", [])) or "無"
-        return await ctx.send(f"**{name}** - 週期: {cycle} 分\n關鍵字: {aliases}")
-
-# ─────────────────────────────────── on_ready：自動恢復排程
 @bot.event
 async def on_ready():
-    now = dt.datetime.now(TIMEZONE)
-    ch_id = int(os.getenv("CHANNEL_ID", "0"))   # 想固定提醒到哪個頻道就設環境變數
-    ch = bot.get_channel(ch_id) if ch_id else None
-    for name in bosses:
-        # 1) 拿目前記錄的 next_spawn
-        nxt_iso = bosses[name].get("next_spawn")
-        if not nxt_iso:
-            continue
-        nxt = dt.datetime.fromisoformat(nxt_iso)
-        # 2) 如果過期，就用原本函式推進
-        if nxt < now:
-            nxt, _ = advance_to_future(name, now)
-        # 3) 寫回檔案（避免反覆推進）、排提醒
-        bosses[name]["next_spawn"] = nxt.isoformat()
-        if ch:
-            schedule_alert(ch, name, nxt)
-    save_bosses(bosses)
-    print(f"[{bot.user}] 排程已自動恢復，共 {len(aio_sched.get_jobs())} 筆")
+    check_respawns.start()
+    print(f'已登入：{bot.user}')
 
-# ---------------- 主程式入口 ----------------
-if __name__ == "__main__":
-    if not TOKEN:
-        raise RuntimeError("環境變數 DISCORD_TOKEN 未設定")
-    bot.run(TOKEN, reconnect=True)
+# 忽略未定義指令錯誤
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
+
+# 列表指令：kb、kb all
+@bot.command(name='kb')
+async def list_bosses(ctx, opt: str = None):
+    now = datetime.now()
+    upcoming = []
+    for n, info in bosses['bosses'].items():
+        ns = info.get('next_spawn')
+        if ns:
+            dt = datetime.fromisoformat(ns)
+            if dt > now:
+                upcoming.append((n, dt))
+    upcoming.sort(key=lambda x: x[1])
+    data = upcoming if opt == 'all' else upcoming[:10]
+    if not data:
+        return await ctx.send("目前沒有任何即將重生的 Boss。")
+    lines = [f"{n}：{dt.strftime('%m/%d %H:%M')}" for n, dt in data]
+    await ctx.send("即將重生的 Boss：\n" + "\n".join(lines))
+
+# 設定死亡時間 k [名稱] [hhmm/MMddhhmm]
+@bot.command(name='k')
+async def set_death(ctx, key: str, time_str: str = None):
+    boss = resolve_boss(key)
+    if not boss:
+        return await ctx.send(f"查無 Boss **{key}**。")
+    death = parse_time_str(time_str) if time_str else datetime.now()
+    if time_str and not death:
+        return await ctx.send("時間格式錯誤，請使用 hhmm 或 MMddhhmm。")
+    info = bosses['bosses'][boss]
+    spawn = death + timedelta(minutes=info['respawn_min'])
+    info['next_spawn'] = spawn.isoformat()
+    info['notified'] = False
+    save_bosses(bosses)
+    await ctx.send(f"已設定 **{boss}** 死亡於 {death.strftime('%m/%d %H:%M')}，下次重生：{spawn.strftime('%m/%d %H:%M')}。")
+
+# 直接指定重生時間 kr [名稱] [hhmm/MMddhhmm]
+@bot.command(name='kr')
+async def set_respawn(ctx, key: str, time_str: str):
+    boss = resolve_boss(key)
+    if not boss:
+        return await ctx.send(f"查無 Boss **{key}**。")
+    dt = parse_time_str(time_str)
+    if not dt:
+        return await ctx.send("時間格式錯誤，請使用 hhmm 或 MMddhhmm。")
+    info = bosses['bosses'][boss]
+    info['next_spawn'] = dt.isoformat()
+    info['notified'] = False
+    save_bosses(bosses)
+    await ctx.send(f"已設定 **{boss}** 下次重生於 {dt.strftime('%m/%d %H:%M')}。")
+
+# 清除死亡時間 clear [all/lost/Boss]
+@bot.command(name='clear')
+async def clear_times(ctx, arg: str):
+    now = datetime.now()
+    data = bosses['bosses']
+    if arg == 'all':
+        for info in data.values(): info['next_spawn']=None; info['notified']=False
+        save_bosses(bosses)
+        return await ctx.send("已清除所有 Boss 的死亡時間。")
+    if arg == 'lost':
+        cnt = 0
+        for info in data.values():
+            ns = info.get('next_spawn')
+            if ns and datetime.fromisoformat(ns) < now:
+                info['next_spawn']=None; info['notified']=False; cnt+=1
+        save_bosses(bosses)
+        return await ctx.send(f"已清除 {cnt} 個已錯過的死亡時間。")
+    boss = resolve_boss(arg)
+    if not boss:
+        return await ctx.send(f"查無 Boss **{arg}**。")
+    data[boss]['next_spawn']=None; data[boss]['notified']=False
+    save_bosses(bosses)
+    await ctx.send(f"已清除 **{boss}** 的死亡時間。")
+
+# 重設所有 Boss !restart [hhmm]
+@bot.command(name='restart', aliases=['!restart'])
+async def restart_all(ctx, time_str: str = None):
+    now = datetime.now()
+    data = bosses['bosses']
+    if time_str:
+        dt = parse_time_str(time_str)
+        if not dt or len(time_str)!=4:
+            return await ctx.send("時間格式錯誤，請使用 hhmm。")
+        death = dt
+    else:
+        death = now
+    for info in data.values():
+        info['next_spawn'] = (death + timedelta(minutes=info['respawn_min'])).isoformat()
+        info['notified'] = False
+    save_bosses(bosses)
+    await ctx.send(f"已將所有 Boss 的死亡時間設定為 {death.strftime('%m/%d %H:%M')}，並計算下次重生。")
+
+# 新增/修改/移除 Boss 指令
+@bot.command(name='add')
+async def add_boss(ctx, name: str, respawn_min: int, *aliases):
+    data = bosses['bosses']
+    if name in data:
+        return await ctx.send(f"Boss **{name}** 已存在。")
+    data[name]={'respawn_min':respawn_min,'aliases':list(aliases),'next_spawn':None,'notified':False}
+    save_bosses(bosses)
+    await ctx.send(f"已新增 **{name}**，週期 {respawn_min} 分鐘，關鍵字：{', '.join(aliases) if aliases else '無'}。")
+
+@bot.command(name='rename')
+async def rename_boss(ctx, old: str, new: str):
+    real=resolve_boss(old); data=bosses['bosses']
+    if not real: return await ctx.send(f"查無 Boss **{old}**。")
+    if new in data: return await ctx.send(f"Boss 名稱 **{new}** 已存在。")
+    data[new]=data.pop(real); save_bosses(bosses)
+    await ctx.send(f"已將 **{real}** 更名為 **{new}**。")
+
+@bot.command(name='retime')
+async def retime_boss(ctx,name:str,respawn_min:int):
+    boss=resolve_boss(name)
+    if not boss: return await ctx.send(f"查無 Boss **{name}**。")
+    bosses['bosses'][boss]['respawn_min']=respawn_min; save_bosses(bosses)
+    await ctx.send(f"已修改 **{boss}** 的重生週期為 {respawn_min} 分鐘。")
+
+@bot.command(name='remove')
+async def remove_boss(ctx,name:str):
+    real=resolve_boss(name)
+    if not real: return await ctx.send(f"查無 Boss **{name}**。")
+    bosses['bosses'].pop(real); save_bosses(bosses)
+    await ctx.send(f"已移除 **{real}**。")
+
+# 關鍵字管理
+@bot.group(name='tags')
+async def tags_group(ctx):
+    if ctx.invoked_subcommand is None:
+        await ctx.send("請使用 `tags add [Boss] [關鍵字]` 或 `tags remove [Boss] [關鍵字]`。")
+
+@tags_group.command(name='add')
+async def tags_add(ctx,name:str,alias:str):
+    boss=resolve_boss(name)
+    if not boss: return await ctx.send(f"查無 Boss **{name}**。")
+    data=bosses['bosses'][boss]
+    if alias in data['aliases']: return await ctx.send(f"關鍵字 **{alias}** 已存在。")
+    data['aliases'].append(alias); save_bosses(bosses)
+    await ctx.send(f"已為 **{boss}** 新增關鍵字 **{alias}**。")
+
+@tags_group.command(name='remove')
+async def tags_remove(ctx,name:str,alias:str):
+    boss=resolve_boss(name)
+    if not boss: return await ctx.send(f"查無 Boss **{name}**。")
+    data=bosses['bosses'][boss]
+    if alias not in data['aliases']: return await ctx.send(f"關鍵字 **{alias}** 不存在。")
+    data['aliases'].remove(alias); save_bosses(bosses)
+    await ctx.send(f"已為 **{boss}** 刪除關鍵字 **{alias}**。")
+
+# 查看設定資料 info [Boss]
+@bot.command(name='info')
+async def info_boss(ctx,name:str=None):
+    data=bosses['bosses']
+    if name:
+        boss=resolve_boss(name)
+        if not boss: return await ctx.send(f"查無 Boss **{name}**。")
+        info=data[boss]; al=', '.join(info['aliases']) if info['aliases'] else '無'
+        return await ctx.send(f"**{boss}**：週期 {info['respawn_min']} 分鐘，關鍵字：{al}")
+    lines=[f"{n}：週期 {v['respawn_min']} 分鐘，關鍵字：{', '.join(v['aliases']) if v['aliases'] else '無'}" for n,v in data.items()]
+    if not lines: return await ctx.send("目前沒有任何 Boss 設定。")
+    await ctx.send("所有 Boss 設定：\n" + "\n".join(lines))
+
+if __name__ == '__main__':
+    bot.run(TOKEN)
