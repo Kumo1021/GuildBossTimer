@@ -1,5 +1,4 @@
-guild-boss-timer/
-│  .gitignore
-│  requirements.txt
-│  main.py
-└─ bosses.json          # 存放王設定與下次重生時間（簡易做法）
+/（專案根目錄）
+├── main.py
+├── bosses.json
+└── requirements.txt
