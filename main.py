@@ -334,6 +334,27 @@ async def info(ctx, *args):
         aliases = ", ".join(data.get("aliases", [])) or "無"
         return await ctx.send(f"**{name}** - 週期: {cycle} 分\n關鍵字: {aliases}")
 
+# ─────────────────────────────────── on_ready：自動恢復排程
+@bot.event
+async def on_ready():
+    now = dt.datetime.now(TIMEZONE)
+    ch_id = int(os.getenv("1367444988153171978", "0"))   # 想固定提醒到哪個頻道就設環境變數
+    ch = bot.get_channel(ch_id) if ch_id else None
+    for name in bosses:
+        # 1) 拿目前記錄的 next_spawn
+        nxt_iso = bosses[name].get("next_spawn")
+        if not nxt_iso:
+            continue
+        nxt = dt.datetime.fromisoformat(nxt_iso)
+        # 2) 如果過期，就用原本函式推進
+        if nxt < now:
+            nxt, _ = advance_to_future(name, now)
+        # 3) 寫回檔案（避免反覆推進）、排提醒
+        bosses[name]["next_spawn"] = nxt.isoformat()
+        if ch:
+            schedule_alert(ch, name, nxt)
+    save_bosses(bosses)
+    print(f"[{bot.user}] 排程已自動恢復，共 {len(aio_sched.get_jobs())} 筆")
 
 # ---------------- 主程式入口 ----------------
 if __name__ == "__main__":
