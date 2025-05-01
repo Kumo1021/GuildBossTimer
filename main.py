@@ -82,7 +82,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="", intents=intents)
 
 aio_sched = AsyncIOScheduler(timezone=TIMEZONE)
-aio_sched.start()
+io_sched.start()
 
 # ─────────────────────────────────── 排程提示
 
@@ -196,6 +196,38 @@ async def restart(ctx, ts: str = None):
     save_bosses(bosses)
     await ctx.send("已重設全部王死亡時間")
 
-# ─────────────────────────────────── 管理指令 add / rename / retime / remove / tags
+# ─────────────────────────────────── 管理指令
 @bot.command(name="add")
-async def add(ctx, name: str, cycle: int, *t):
+async def add(ctx, name: str, cycle: int, *tags):
+    if name in bosses:
+        return await ctx.send("已存在同名王")
+    bosses[name] = {"respawn_min": int(cycle), "aliases": list(tags), "next_spawn": None}
+    save_bosses(bosses)
+    await ctx.send(f"已新增 **{name}**，週期 {cycle} 分，關鍵字 {', '.join(tags) if tags else '無'}")
+
+
+@bot.command(name="rename")
+async def rename(ctx, old: str, new: str):
+    if new in bosses:
+        return await ctx.send("新名稱已存在")
+    name = resolve_boss(old)
+    if not name:
+        return await ctx.send("查無此王/關鍵字")
+    bosses[new] = bosses.pop(name)
+    save_bosses(bosses)
+    await ctx.send(f"已將 **{name}** 更名為 **{new}**")
+
+
+@bot.command(name="retime")
+async def retime(ctx, key: str, cycle: int):
+    name = resolve_boss(key)
+    if not name:
+        return await ctx.send("查無此王/關鍵字")
+    bosses[name]["respawn_min"] = int(cycle)
+    save_bosses(bosses)
+    await ctx.send(f"已修改 **{name}** 週期為 {cycle} 分")
+
+
+@bot.command(name="remove")
+async def remove(ctx, key: str):
+    name = resolve_boss
