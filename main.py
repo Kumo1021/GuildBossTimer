@@ -84,7 +84,7 @@ bot = commands.Bot(command_prefix="", intents=intents)
 aio_sched = AsyncIOScheduler(timezone=TIMEZONE)
 aio_sched.start()
 
-default_channel_id = int(os.getenv("1367444988153171978", 0))  # 建議把公告頻道 ID 放 .env
+default_channel_id = int(os.getenv("1367444988153171980", 0))  # 建議把公告頻道 ID 放 .env
 alert_ch = bot.get_channel(default_channel_id)
 
 now = dt.datetime.now(TIMEZONE)
@@ -338,7 +338,7 @@ async def info(ctx, *args):
 @bot.event
 async def on_ready():
     now = dt.datetime.now(TIMEZONE)
-    ch_id = int(os.getenv("1367444988153171978", "0"))   # 想固定提醒到哪個頻道就設環境變數
+    ch_id = int(os.getenv("1367444988153171980", "0"))   # 想固定提醒到哪個頻道就設環境變數
     ch = bot.get_channel(ch_id) if ch_id else None
     for name in bosses:
         # 1) 拿目前記錄的 next_spawn
