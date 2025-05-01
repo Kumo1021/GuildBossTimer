@@ -1,3 +1,4 @@
+import discord
 import json, re, os, asyncio, datetime as dt
 import pytz
 from discord.ext import commands, tasks
@@ -21,7 +22,7 @@ def save_bosses(data):
 bosses = load_bosses()
 
 # ──Bot 初始化──────────────────────────
-intents = commands.Intents.default()
+intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 scheduler = AsyncIOScheduler(timezone=TIMEZONE)
