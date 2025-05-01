@@ -230,8 +230,67 @@ async def retime(ctx, key: str, cycle: int):
 
 @bot.command(name="remove")
 async def remove(ctx, key: str):
-    name = resolve_boss
+    name = resolve_boss(key)
+    if not name:
+        return await ctx.send("查無此王/關鍵字")
+    bosses.pop(name)
+    save_bosses(bosses)
+    await ctx.send(f"已刪除 **{name}** 的資料")
 
+# ---------------- 新增指令 ----------------
+
+@bot.command(name="tags")
+async def tags(ctx, action: str, boss_name: str, tag: str):
+    """用法：tags add/remove [王名稱] [關鍵字]"""
+    name = resolve_boss(boss_name)
+    if not name:
+        return await ctx.send("查無此王/關鍵字")
+
+    if action == "add":
+        if tag in bosses[name]["aliases"]:
+            return await ctx.send("此關鍵字已存在")
+        bosses[name]["aliases"].append(tag)
+        save_bosses(bosses)
+        return await ctx.send(f"已為 **{name}** 新增關鍵字 **{tag}**")
+
+    elif action == "remove":
+        if tag not in bosses[name]["aliases"]:
+            return await ctx.send("此關鍵字不存在")
+        bosses[name]["aliases"].remove(tag)
+        save_bosses(bosses)
+        return await ctx.send(f"已從 **{name}** 移除關鍵字 **{tag}**")
+
+    else:
+        return await ctx.send("格式錯誤，用法: tags add/remove [王名稱] [關鍵字]")
+
+
+@bot.command(name="info")
+async def info(ctx, *args):
+    """列出王的設定資料：
+    - info                 列出全部王的週期與關鍵字
+    - info [王名稱]        列出指定王的週期與關鍵字
+    """
+    if len(args) == 0:
+        if not bosses:
+            return await ctx.send("目前無任何王的資料")
+        lines = []
+        for name, data in bosses.items():
+            cycle = data.get("respawn_min", "未知")
+            aliases = ", ".join(data.get("aliases", [])) or "無"
+            lines.append(f"**{name}** - 週期: {cycle} 分, 關鍵字: {aliases}")
+        return await ctx.send("\n".join(lines))
+
+    else:
+        name = resolve_boss(args[0])
+        if not name:
+            return await ctx.send("查無此王/關鍵字")
+        data = bosses[name]
+        cycle = data.get("respawn_min", "未知")
+        aliases = ", ".join(data.get("aliases", [])) or "無"
+        return await ctx.send(f"**{name}** - 週期: {cycle} 分\n關鍵字: {aliases}")
+
+
+# ---------------- 主程式入口 ----------------
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("環境變數 DISCORD_TOKEN 未設定")
