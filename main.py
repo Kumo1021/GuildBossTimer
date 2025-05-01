@@ -84,7 +84,7 @@ bot = commands.Bot(command_prefix="", intents=intents)
 aio_sched = AsyncIOScheduler(timezone=TIMEZONE)
 aio_sched.start()
 
-default_channel_id = int(os.getenv("1367444988153171980", 0))  # 建議把公告頻道 ID 放 .env
+default_channel_id = int(os.getenv("CHANNEL_ID=1367444988153171980", 0))  # 建議把公告頻道 ID 放 .env
 alert_ch = bot.get_channel(default_channel_id)
 
 now = dt.datetime.now(TIMEZONE)
@@ -97,12 +97,25 @@ for name, data in bosses.items():
         schedule_alert(alert_ch, name, nxt)
 # ─────────────────────────────────── 排程提示
 
-def schedule_alert(ch, boss: str, when: dt.datetime):
+from discord import AllowedMentions
+
+def schedule_alert(ch, boss: str, when: dt.datetime, tags: List[str] | None = None):
     alert = when - dt.timedelta(minutes=5)
     if alert < dt.datetime.now(TIMEZONE):
         return
+
+    # tags 來自 add 指令儲存的別名；沒給就預設 @here
+    mention = " ".join(tags) if tags else "@here"
+    msg = f"{mention} ⏰ **{boss}** 5 分鐘後重生！"
+
     aio_sched.add_job(
-        lambda: asyncio.run_coroutine_threadsafe(ch.send(f"⏰ **{boss}** 5 分鐘後重生！"), bot.loop),
+        lambda: asyncio.run_coroutine_threadsafe(
+            ch.send(
+                msg,
+                allowed_mentions=AllowedMentions(everyone=True)  # 允許 @here/@everyone
+            ),
+            bot.loop
+        ),
         trigger=DateTrigger(run_date=alert),
         name=f"alert_{boss}_{int(when.timestamp())}"
     )
@@ -124,7 +137,7 @@ async def kb(ctx, sub: str = None):
         nxt, missed = advance_to_future(n, now)
         if nxt:
             rows.append((n, nxt, missed))
-            schedule_alert(ctx.channel, n, nxt)
+            schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
             if missed:
                 changed = True
     if changed:
@@ -157,7 +170,7 @@ async def k(ctx, key: str, when: str = None):
     nxt = death + dt.timedelta(minutes=bosses[name]["respawn_min"])
     bosses[name]["next_spawn"] = nxt.isoformat()
     save_bosses(bosses)
-    schedule_alert(ctx.channel, name, nxt)
+    schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
     await ctx.send(f"已記錄 **{name}**，下次 {nxt:{DATE_FMT}} 重生")
 
 # ─────────────────────────────────── kr
@@ -172,7 +185,7 @@ async def kr(ctx, key: str, ts: str):
         return await ctx.send("時間格式錯誤 hhmm 或 MMddhhmm")
     bosses[name]["next_spawn"] = nxt.isoformat()
     save_bosses(bosses)
-    schedule_alert(ctx.channel, name, nxt)
+    schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
     await ctx.send(f"已設定 **{name}** 下一次 {nxt:{DATE_FMT}} 重生")
 
 # ─────────────────────────────────── clear
@@ -207,7 +220,7 @@ async def restart(ctx, ts: str = None):
     for n, d in bosses.items():
         nxt = base + dt.timedelta(minutes=d["respawn_min"])
         d["next_spawn"] = nxt.isoformat()
-        schedule_alert(ctx.channel, n, nxt)
+        schedule_alert(ctx.channel, name, nxt, bosses[name]["aliases"])
     save_bosses(bosses)
     await ctx.send("已重設全部王死亡時間")
 
@@ -338,7 +351,7 @@ async def info(ctx, *args):
 @bot.event
 async def on_ready():
     now = dt.datetime.now(TIMEZONE)
-    ch_id = int(os.getenv("1367444988153171980", "0"))   # 想固定提醒到哪個頻道就設環境變數
+    ch_id = int(os.getenv("CHANNEL_ID=1367444988153171980", "0"))   # 想固定提醒到哪個頻道就設環境變數
     ch = bot.get_channel(ch_id) if ch_id else None
     for name in bosses:
         # 1) 拿目前記錄的 next_spawn
