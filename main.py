@@ -231,3 +231,8 @@ async def retime(ctx, key: str, cycle: int):
 @bot.command(name="remove")
 async def remove(ctx, key: str):
     name = resolve_boss
+
+if __name__ == "__main__":
+    if not TOKEN:
+        raise RuntimeError("環境變數 DISCORD_TOKEN 未設定")
+    bot.run(TOKEN, reconnect=True)
