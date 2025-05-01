@@ -82,7 +82,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="", intents=intents)
 
 aio_sched = AsyncIOScheduler(timezone=TIMEZONE)
-io_sched.start()
+aio_sched.start()
 
 # ─────────────────────────────────── 排程提示
 
