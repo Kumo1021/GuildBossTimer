@@ -84,6 +84,17 @@ bot = commands.Bot(command_prefix="", intents=intents)
 aio_sched = AsyncIOScheduler(timezone=TIMEZONE)
 aio_sched.start()
 
+default_channel_id = int(os.getenv("1367444988153171978", 0))  # 建議把公告頻道 ID 放 .env
+alert_ch = bot.get_channel(default_channel_id)
+
+now = dt.datetime.now(TIMEZONE)
+for name, data in bosses.items():
+    nxt_iso = data.get("next_spawn")
+    if not nxt_iso:
+        continue
+    nxt = dt.datetime.fromisoformat(nxt_iso)
+    if nxt > now and alert_ch:
+        schedule_alert(alert_ch, name, nxt)
 # ─────────────────────────────────── 排程提示
 
 def schedule_alert(ch, boss: str, when: dt.datetime):
@@ -113,6 +124,7 @@ async def kb(ctx, sub: str = None):
         nxt, missed = advance_to_future(n, now)
         if nxt:
             rows.append((n, nxt, missed))
+            schedule_alert(ctx.channel, n, nxt)
             if missed:
                 changed = True
     if changed:
