@@ -19,10 +19,10 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 
-# --- CHANGED: 修改指令前綴 ---
-# 允許 'k' 或 '' (無前綴) 作為指令開頭
-# 這讓您可以使用 'kb' 或 'k kb'
-bot = commands.Bot(command_prefix=['k', 'K', ''], intents=intents, case_insensitive=True)
+# --- FIXED: 恢復使用一個固定的前綴來解決指令衝突 ---
+# 推薦使用 '!' 或 '.' 作為前綴
+bot = commands.Bot(command_prefix='!', intents=intents, case_insensitive=True)
+
 
 # --- 資料處理 (此部分無變更) ---
 def load_bosses():
@@ -225,7 +225,6 @@ async def clear(ctx, query: str):
     save_bosses(bosses_data)
     await ctx.send(f"已清除 **{boss_name}** 的重生時間記錄。")
 
-# --- CHANGED: 移除管理員權限 ---
 @bot.command(name='restart', aliases=['!restart'])
 async def restart_all(ctx, time_str: str = None):
     if time_str:
@@ -254,7 +253,6 @@ async def add(ctx, name: str, respawn_min: int, *aliases):
     save_bosses(bosses_data)
     await ctx.send(f"已新增王: **{name}** (重生週期: {respawn_min}分鐘, 別名: {', '.join(aliases) if aliases else '無'})")
 
-# --- CHANGED: 移除管理員權限 ---
 @bot.command()
 async def remove(ctx, name: str):
     boss_name = find_boss_by_name_or_alias(name)
@@ -265,7 +263,6 @@ async def remove(ctx, name: str):
     save_bosses(bosses_data)
     await ctx.send(f"已移除王: **{boss_name}**。")
     
-# --- CHANGED: 移除管理員權限 ---
 @bot.command()
 async def rename(ctx, old_name: str, new_name: str):
     boss_name = find_boss_by_name_or_alias(old_name)
@@ -293,7 +290,7 @@ async def retime(ctx, name: str, new_time: int):
 @bot.group(invoke_without_command=True)
 @commands.has_permissions(administrator=True)
 async def tags(ctx):
-    await ctx.send("請使用 `tags add` 或 `tags remove`。")
+    await ctx.send("請使用 `!tags add` 或 `!tags remove`。")
 
 @tags.command(name='add')
 @commands.has_permissions(administrator=True)
